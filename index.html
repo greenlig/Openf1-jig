@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Bortoleto · Miami 2026 · Fastest Lap (L56)</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #12161f;
+    --panel-2: #1a2030;
+    --ink: #e7ecf3;
+    --muted: #8a93a6;
+    --accent: #ff2d6f;       /* Bortoleto pink-ish accent */
+    --audi: #d6001c;         /* Audi red */
+    --green: #41d39a;
+    --yellow: #ffd34d;
+    --blue: #5aa9ff;
+    --grid: #232a3a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif; }
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+  header {
+    padding: 14px 20px; border-bottom: 1px solid var(--grid);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header .badge {
+    background: var(--audi); color: #fff; font-weight: 800;
+    border-radius: 4px; padding: 4px 8px; font-size: 12px; letter-spacing: 0.05em;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  header .spacer { flex: 1; }
+  header .status { color: var(--muted); font-size: 12px; }
+  main {
+    flex: 1; display: grid; grid-template-columns: 1fr 320px; gap: 16px;
+    padding: 16px; min-height: 0;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .stage {
+    background: var(--panel); border: 1px solid var(--grid); border-radius: 12px;
+    position: relative; overflow: hidden; min-height: 480px;
+  }
+  .stage canvas { display: block; width: 100%; height: 100%; }
+  .stage .overlay {
+    position: absolute; left: 12px; top: 12px; padding: 8px 10px;
+    background: rgba(10, 12, 18, 0.6); border: 1px solid var(--grid);
+    border-radius: 8px; font-size: 12px; color: var(--muted); backdrop-filter: blur(6px);
+  }
+  .stage .overlay strong { color: var(--ink); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--grid); border-radius: 12px;
+    padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  }
+  .panel h2 { font-size: 12px; letter-spacing: 0.08em; color: var(--muted); margin: 0; text-transform: uppercase; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat {
+    background: var(--panel-2); border-radius: 8px; padding: 10px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .unit { font-size: 12px; color: var(--muted); margin-left: 4px; font-weight: 400; }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--green); transition: width 80ms linear; }
+  .bar.brake > span { background: var(--accent); }
+  .row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .row .lbl { width: 60px; }
+  .row .val { width: 40px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .pill {
+    display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 700;
+    border-radius: 999px; letter-spacing: 0.06em;
+  }
+  .pill.on { background: var(--green); color: #04130c; }
+  .pill.off { background: var(--panel-2); color: var(--muted); }
+  .controls {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; border-top: 1px solid var(--grid);
+    background: var(--panel);
+  }
+  .controls button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 6px 12px; font-weight: 600; cursor: pointer;
+  }
+  .controls button.secondary { background: var(--panel-2); color: var(--ink); }
+  .controls input[type=range] { flex: 1; }
+  .controls .speed { font-size: 12px; color: var(--muted); }
+  .controls select {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--grid);
+    border-radius: 6px; padding: 4px 8px; font-size: 12px;
+  }
+  .sectors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .sectors .sec {
+    background: var(--panel-2); padding: 8px; border-radius: 6px; text-align: center;
+    font-size: 12px; color: var(--muted);
+  }
+  .sectors .sec strong { display: block; color: var(--ink); font-size: 16px; font-variant-numeric: tabular-nums; }
+  footer {
+    padding: 8px 16px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--grid);
+    text-align: center;
+  }
+  footer a { color: var(--blue); text-decoration: none; }
+  .err {
+    padding: 12px; background: #311; border: 1px solid #844; color: #fbb;
+    border-radius: 8px; font-size: 13px; margin: 16px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="badge">#5</span>
+  <h1>Gabriel Bortoleto · Audi <small>Miami GP 2026 · Fastest personal lap (L56)</small></h1>
+  <span class="spacer"></span>
+  <span class="status" id="status">Loading…</span>
+</header>
+
+<main>
+  <div class="stage">
+    <canvas id="track"></canvas>
+    <div class="overlay" id="overlay">
+      <div><strong>Lap 56</strong> · session 11280 · driver #5</div>
+      <div id="overlay-time">t = 0.00s / 0.00s</div>
+    </div>
+  </div>
+
+  <aside class="panel">
+    <h2>Lap</h2>
+    <div class="sectors" id="sectors">
+      <div class="sec"><span>S1</span><strong id="s1">—</strong></div>
+      <div class="sec"><span>S2</span><strong id="s2">—</strong></div>
+      <div class="sec"><span>S3</span><strong id="s3">—</strong></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat"><span class="label">Lap time</span><span class="value" id="lap-time">—</span></div>
+      <div class="stat"><span class="label">Top speed</span><span class="value" id="top-speed">—<span class="unit">km/h</span></span></div>
+    </div>
+
+    <h2>Live telemetry</h2>
+    <div class="stat-grid">
+      <div class="stat"><span class="label">Speed</span><span class="value" id="speed">0<span class="unit">km/h</span></span></div>
+      <div class="stat"><span class="label">Gear</span><span class="value" id="gear">N</span></div>
+    </div>
+    <div class="row"><span class="lbl">Throttle</span><div class="bar"><span id="throttle-bar" style="width:0%"></span></div><span class="val" id="throttle-val">0%</span></div>
+    <div class="row"><span class="lbl">Brake</span><div class="bar brake"><span id="brake-bar" style="width:0%"></span></div><span class="val" id="brake-val">0%</span></div>
+    <div class="row"><span class="lbl">RPM</span><div class="bar"><span id="rpm-bar" style="width:0%; background: var(--yellow)"></span></div><span class="val" id="rpm-val">0</span></div>
+    <div class="row"><span class="lbl">DRS</span><span class="pill off" id="drs-pill">OFF</span></div>
+
+    <h2>Source</h2>
+    <div style="font-size: 11px; color: var(--muted); line-height: 1.5">
+      OpenF1 unofficial API — meeting 1284 (Miami GP 2026), session 11280 (Race), driver 5, lap 56.
+      Location at ~3.7 Hz, smoothed for playback.
+    </div>
+  </aside>
+</main>
+
+<div class="controls">
+  <button id="play">▶ Play</button>
+  <button id="restart" class="secondary">⟲ Restart</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0" step="1" />
+  <span class="speed">Speed</span>
+  <select id="rate">
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1" selected>1×</option>
+    <option value="2">2×</option>
+    <option value="4">4×</option>
+  </select>
+</div>
+
+<footer>
+  Data: <a href="https://openf1.org" target="_blank" rel="noopener">openf1.org</a> ·
+  Unofficial fan/research data — not a licensed F1 feed.
+</footer>
+
+<script>
+(() => {
+  const SESSION_KEY = 11280;
+  const DRIVER_NUMBER = 5;
+  const LAP_NUMBER = 56;
+  const API = "https://api.openf1.org/v1";
+
+  const $ = (id) => document.getElementById(id);
+  const status = $("status");
+  const setStatus = (s) => { status.textContent = s; };
+
+  const fmtLap = (s) => {
+    if (s == null || isNaN(s)) return "—";
+    const m = Math.floor(s / 60);
+    const sec = (s - m * 60);
+    return `${m}:${sec.toFixed(3).padStart(6, "0")}`;
+  };
+  const fmtSec = (s) => (s == null || isNaN(s)) ? "—" : s.toFixed(3);
+
+  async function fetchJSON(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+    return r.json();
+  }
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  // Linear interpolation of a value at time `t` over a sorted-by-time series.
+  function interp(series, t, key) {
+    if (!series.length) return null;
+    if (t <= series[0].t) return series[0][key];
+    if (t >= series[series.length - 1].t) return series[series.length - 1][key];
+    // binary search
+    let lo = 0, hi = series.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (series[mid].t <= t) lo = mid; else hi = mid;
+    }
+    const a = series[lo], b = series[hi];
+    const u = (t - a.t) / (b.t - a.t || 1);
+    return lerp(a[key], b[key], u);
+  }
+  function nearest(series, t, key) {
+    if (!series.length) return null;
+    if (t <= series[0].t) return series[0][key];
+    if (t >= series[series.length - 1].t) return series[series.length - 1][key];
+    let lo = 0, hi = series.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (series[mid].t <= t) lo = mid; else hi = mid;
+    }
+    const a = series[lo], b = series[hi];
+    return (t - a.t) < (b.t - t) ? a[key] : b[key];
+  }
+
+  // ---- Canvas rendering ----
+  const canvas = $("track");
+  const ctx = canvas.getContext("2d");
+  let dpr = Math.max(1, window.devicePixelRatio || 1);
+  let trackPath = []; // array of {x,y} normalized to canvas
+  let bbox = null;
+
+  function resizeCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+  }
+  window.addEventListener("resize", () => { resizeCanvas(); draw(currentT); });
+
+  function project(pt, w, h) {
+    if (!bbox) return { x: 0, y: 0 };
+    const pad = 30 * dpr;
+    const sx = (w - 2 * pad) / (bbox.maxX - bbox.minX || 1);
+    const sy = (h - 2 * pad) / (bbox.maxY - bbox.minY || 1);
+    const s = Math.min(sx, sy);
+    const cx = (w - s * (bbox.maxX - bbox.minX)) / 2;
+    const cy = (h - s * (bbox.maxY - bbox.minY)) / 2;
+    return {
+      x: cx + (pt.x - bbox.minX) * s,
+      // OpenF1 y axis: invert so the track reads naturally
+      y: cy + (bbox.maxY - pt.y) * s,
+    };
+  }
+
+  function draw(t) {
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (!trackPath.length) return;
+
+    // Track outline
+    ctx.lineWidth = 14 * dpr;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#1f2636";
+    ctx.beginPath();
+    for (let i = 0; i < trackPath.length; i++) {
+      const p = project(trackPath[i], w, h);
+      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+
+    // Inner racing line, thinner
+    ctx.lineWidth = 2 * dpr;
+    ctx.strokeStyle = "#2a3346";
+    ctx.stroke();
+
+    // Progress trail up to time t, coloured by throttle/brake
+    if (loc.length) {
+      let i = 0;
+      while (i < loc.length - 1 && loc[i + 1].t <= t) i++;
+      ctx.lineWidth = 4 * dpr;
+      for (let k = 1; k <= i; k++) {
+        const a = project(loc[k - 1], w, h);
+        const b = project(loc[k], w, h);
+        const tk = loc[k].t;
+        const thr = nearest(car, tk, "throttle") ?? 0;
+        const brk = nearest(car, tk, "brake") ?? 0;
+        let col;
+        if (brk > 30) col = "#ff2d6f";
+        else if (thr > 80) col = "#41d39a";
+        else if (thr > 30) col = "#ffd34d";
+        else col = "#5aa9ff";
+        ctx.strokeStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+    }
+
+    // Car position
+    if (loc.length) {
+      const x = interp(loc, t, "x");
+      const y = interp(loc, t, "y");
+      const p = project({ x, y }, w, h);
+
+      // Glow
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(214, 0, 28, 0.25)";
+      ctx.arc(p.x, p.y, 14 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+      // Dot
+      ctx.beginPath();
+      ctx.fillStyle = "#d6001c";
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2 * dpr;
+      ctx.arc(p.x, p.y, 7 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Driver tag
+      ctx.font = `${12 * dpr}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillStyle = "#fff";
+      ctx.textBaseline = "middle";
+      ctx.fillText("BOR · 5", p.x + 12 * dpr, p.y - 12 * dpr);
+    }
+  }
+
+  // ---- State ----
+  let lap = null;       // lap metadata
+  let loc = [];         // [{t, x, y}] t in seconds since lap start
+  let car = [];         // [{t, speed, throttle, brake, gear, rpm, drs}]
+  let lapDuration = 0;
+  let topSpeed = 0;
+
+  let playing = false;
+  let lastFrame = 0;
+  let currentT = 0;
+  let rate = 1;
+
+  function updatePanels(t) {
+    $("overlay-time").textContent = `t = ${t.toFixed(2)}s / ${lapDuration.toFixed(2)}s`;
+    if (!car.length) return;
+    const speed = nearest(car, t, "speed") ?? 0;
+    const thr = nearest(car, t, "throttle") ?? 0;
+    const brk = nearest(car, t, "brake") ?? 0;
+    const gear = nearest(car, t, "gear");
+    const rpm = nearest(car, t, "rpm") ?? 0;
+    const drs = nearest(car, t, "drs") ?? 0;
+
+    $("speed").innerHTML = `${Math.round(speed)}<span class="unit">km/h</span>`;
+    $("gear").textContent = gear == null || gear === 0 ? "N" : String(gear);
+    $("throttle-bar").style.width = `${Math.max(0, Math.min(100, thr))}%`;
+    $("throttle-val").textContent = `${Math.round(thr)}%`;
+    $("brake-bar").style.width = `${Math.max(0, Math.min(100, brk))}%`;
+    $("brake-val").textContent = `${Math.round(brk)}%`;
+    $("rpm-bar").style.width = `${Math.max(0, Math.min(100, rpm / 150))}%`;
+    $("rpm-val").textContent = String(Math.round(rpm));
+    // OpenF1 DRS values: 10/12 = off, 8 = eligible, 10 also off; >=10 detected mostly off; codes 12/14 = on
+    const drsOn = (drs === 10 || drs === 12 || drs === 14);
+    const pill = $("drs-pill");
+    pill.classList.toggle("on", drsOn);
+    pill.classList.toggle("off", !drsOn);
+    pill.textContent = drsOn ? "ON" : "OFF";
+  }
+
+  function tick(now) {
+    if (!playing) return;
+    const dt = (now - lastFrame) / 1000;
+    lastFrame = now;
+    currentT += dt * rate;
+    if (currentT >= lapDuration) {
+      currentT = lapDuration;
+      playing = false;
+      $("play").textContent = "▶ Play";
+    }
+    $("scrub").value = String(Math.round((currentT / lapDuration) * 1000));
+    draw(currentT);
+    updatePanels(currentT);
+    if (playing) requestAnimationFrame(tick);
+  }
+
+  function play() {
+    if (currentT >= lapDuration) currentT = 0;
+    playing = true;
+    lastFrame = performance.now();
+    $("play").textContent = "❚❚ Pause";
+    requestAnimationFrame(tick);
+  }
+  function pause() {
+    playing = false;
+    $("play").textContent = "▶ Play";
+  }
+
+  $("play").addEventListener("click", () => playing ? pause() : play());
+  $("restart").addEventListener("click", () => {
+    currentT = 0;
+    $("scrub").value = "0";
+    draw(0);
+    updatePanels(0);
+  });
+  $("scrub").addEventListener("input", (e) => {
+    pause();
+    currentT = (Number(e.target.value) / 1000) * lapDuration;
+    draw(currentT);
+    updatePanels(currentT);
+  });
+  $("rate").addEventListener("change", (e) => { rate = Number(e.target.value); });
+
+  async function load() {
+    try {
+      setStatus("Loading lap…");
+      const lapRows = await fetchJSON(`${API}/laps?session_key=${SESSION_KEY}&driver_number=${DRIVER_NUMBER}&lap_number=${LAP_NUMBER}`);
+      if (!lapRows.length) throw new Error("No lap data returned");
+      lap = lapRows[0];
+      lapDuration = lap.lap_duration;
+      $("lap-time").textContent = fmtLap(lap.lap_duration);
+      $("s1").textContent = fmtSec(lap.duration_sector_1);
+      $("s2").textContent = fmtSec(lap.duration_sector_2);
+      $("s3").textContent = fmtSec(lap.duration_sector_3);
+      $("top-speed").innerHTML = `${lap.st_speed ?? "—"}<span class="unit">km/h</span>`;
+
+      const lapStart = new Date(lap.date_start);
+      // pad slightly so we capture the exact endpoints
+      const padMs = 250;
+      const startISO = new Date(lapStart.getTime() - padMs).toISOString();
+      const endISO = new Date(lapStart.getTime() + lap.lap_duration * 1000 + padMs).toISOString();
+
+      setStatus("Loading location & telemetry…");
+      const [locRows, carRows] = await Promise.all([
+        fetchJSON(`${API}/location?session_key=${SESSION_KEY}&driver_number=${DRIVER_NUMBER}&date>=${startISO}&date<=${endISO}`),
+        fetchJSON(`${API}/car_data?session_key=${SESSION_KEY}&driver_number=${DRIVER_NUMBER}&date>=${startISO}&date<=${endISO}`),
+      ]);
+
+      const lapStartMs = lapStart.getTime();
+      loc = locRows
+        .map(r => ({ t: (new Date(r.date).getTime() - lapStartMs) / 1000, x: r.x, y: r.y }))
+        .filter(r => r.t >= 0 && r.t <= lap.lap_duration && Number.isFinite(r.x) && Number.isFinite(r.y))
+        .sort((a, b) => a.t - b.t);
+
+      car = carRows
+        .map(r => ({
+          t: (new Date(r.date).getTime() - lapStartMs) / 1000,
+          speed: r.speed, throttle: r.throttle, brake: r.brake,
+          gear: r.n_gear, rpm: r.rpm, drs: r.drs,
+        }))
+        .filter(r => r.t >= 0 && r.t <= lap.lap_duration)
+        .sort((a, b) => a.t - b.t);
+
+      if (!loc.length) throw new Error("No location samples in lap window");
+      topSpeed = car.reduce((m, r) => Math.max(m, r.speed || 0), 0);
+      if (topSpeed) $("top-speed").innerHTML = `${Math.round(topSpeed)}<span class="unit">km/h</span>`;
+
+      // Compute bbox for projection and seed track outline from this lap's points
+      bbox = loc.reduce((b, p) => ({
+        minX: Math.min(b.minX, p.x), maxX: Math.max(b.maxX, p.x),
+        minY: Math.min(b.minY, p.y), maxY: Math.max(b.maxY, p.y),
+      }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+      trackPath = loc.map(p => ({ x: p.x, y: p.y }));
+
+      resizeCanvas();
+      draw(0);
+      updatePanels(0);
+      setStatus(`Loaded · ${loc.length} location pts · ${car.length} telemetry pts`);
+    } catch (e) {
+      console.error(e);
+      setStatus("Error: " + e.message);
+      const stage = document.querySelector(".stage");
+      const div = document.createElement("div");
+      div.className = "err";
+      div.textContent = "Failed to load OpenF1 data: " + e.message;
+      stage.appendChild(div);
+    }
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>
