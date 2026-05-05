@@ -616,7 +616,7 @@
     for (const p of loc) {
       const dx = p.x - mx, dy = p.y - my;
       p.x = dx * cosT - dy * sinT;
-      p.y = dx * sinT + dy * cosT;
+      p.y = -(dx * sinT + dy * cosT); // flip Y so the iso layout matches a normal map view
     }
 
     // World-space bounds drive the height scale and the iso projection.
