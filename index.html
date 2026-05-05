@@ -303,116 +303,118 @@
     return interp(loc, t, "h") ?? 0;
   }
 
+  function drawTrackSeg(a, b, w, h) {
+    const ap = projectXYZ(a.x, a.y, 0, w, h);
+    const bp = projectXYZ(b.x, b.y, 0, w, h);
+    ctx.lineWidth = 12 * dpr;
+    ctx.strokeStyle = "#1f2636";
+    ctx.beginPath();
+    ctx.moveTo(ap.x, ap.y);
+    ctx.lineTo(bp.x, bp.y);
+    ctx.stroke();
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = "#2a3346";
+    ctx.beginPath();
+    ctx.moveTo(ap.x, ap.y);
+    ctx.lineTo(bp.x, bp.y);
+    ctx.stroke();
+  }
+
+  function drawRibbonSeg(a, b, w, h) {
+    const a0 = projectXYZ(a.x, a.y, 0, w, h);
+    const b0 = projectXYZ(b.x, b.y, 0, w, h);
+    const a1 = projectXYZ(a.x, a.y, a.h, w, h);
+    const b1 = projectXYZ(b.x, b.y, b.h, w, h);
+    const thr = nearest(car, b.t, "throttle") ?? 0;
+    const brk = nearest(car, b.t, "brake") ?? 0;
+    const col = colorFor(thr, brk);
+    ctx.fillStyle = withAlpha(col, 0.30);
+    ctx.beginPath();
+    ctx.moveTo(a0.x, a0.y);
+    ctx.lineTo(b0.x, b0.y);
+    ctx.lineTo(b1.x, b1.y);
+    ctx.lineTo(a1.x, a1.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.lineWidth = 3 * dpr;
+    ctx.strokeStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(a1.x, a1.y);
+    ctx.lineTo(b1.x, b1.y);
+    ctx.stroke();
+  }
+
+  function drawCarMarker(x, y, z, w, h) {
+    const ground = projectXYZ(x, y, 0, w, h);
+    const air = projectXYZ(x, y, z, w, h);
+    const driver = driversByNum[driverNumber] || {};
+    const teamColor = driver.team_colour ? `#${driver.team_colour}` : "#d6001c";
+    const acro = driver.name_acronym || "—";
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.ellipse(ground.x, ground.y, 9 * dpr, 4 * dpr, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = withAlpha(teamColor, 0.5);
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(ground.x, ground.y);
+    ctx.lineTo(air.x, air.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.fillStyle = withAlpha(teamColor, 0.35);
+    ctx.arc(air.x, air.y, 14 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = teamColor;
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2 * dpr;
+    ctx.arc(air.x, air.y, 7 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.font = `${12 * dpr}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.fillStyle = "#fff";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${acro} · ${driverNumber}`, air.x + 12 * dpr, air.y - 12 * dpr);
+  }
+
   function draw(t) {
     const w = canvas.width, h = canvas.height;
     ctx.fillStyle = "#0b0d12";
     ctx.fillRect(0, 0, w, h);
-    if (!trackPath.length) return;
+    if (!loc.length) return;
 
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
 
-    // Ground baseline (z=0) — full closed lap, drawn first so the 3D ribbon sits on top.
-    ctx.lineWidth = 12 * dpr;
-    ctx.strokeStyle = "#1f2636";
-    ctx.beginPath();
-    for (let i = 0; i < trackPath.length; i++) {
-      const p = projectXYZ(trackPath[i].x, trackPath[i].y, 0, w, h);
-      if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-    }
-    ctx.stroke();
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.strokeStyle = "#2a3346";
-    ctx.stroke();
+    // How far the playback has progressed.
+    let upto = 0;
+    while (upto < loc.length - 1 && loc[upto + 1].t <= t) upto++;
 
-    // Played-back 3D ribbon: a coloured wall between baseline and trail height.
-    if (loc.length) {
-      let upto = 0;
-      while (upto < loc.length - 1 && loc[upto + 1].t <= t) upto++;
-
-      // Walls (filled quads), so depth + colour read clearly.
-      for (let k = 1; k <= upto; k++) {
-        const a = loc[k - 1], b = loc[k];
-        const a0 = projectXYZ(a.x, a.y, 0, w, h);
-        const b0 = projectXYZ(b.x, b.y, 0, w, h);
-        const a1 = projectXYZ(a.x, a.y, a.h, w, h);
-        const b1 = projectXYZ(b.x, b.y, b.h, w, h);
-        const tk = b.t;
-        const thr = nearest(car, tk, "throttle") ?? 0;
-        const brk = nearest(car, tk, "brake") ?? 0;
-        const col = colorFor(thr, brk);
-        ctx.fillStyle = withAlpha(col, 0.30);
-        ctx.beginPath();
-        ctx.moveTo(a0.x, a0.y);
-        ctx.lineTo(b0.x, b0.y);
-        ctx.lineTo(b1.x, b1.y);
-        ctx.lineTo(a1.x, a1.y);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      // Top edge of the ribbon — solid coloured stroke.
-      ctx.lineWidth = 3 * dpr;
-      for (let k = 1; k <= upto; k++) {
-        const a = loc[k - 1], b = loc[k];
-        const a1 = projectXYZ(a.x, a.y, a.h, w, h);
-        const b1 = projectXYZ(b.x, b.y, b.h, w, h);
-        const tk = b.t;
-        const thr = nearest(car, tk, "throttle") ?? 0;
-        const brk = nearest(car, tk, "brake") ?? 0;
-        ctx.strokeStyle = colorFor(thr, brk);
-        ctx.beginPath();
-        ctx.moveTo(a1.x, a1.y);
-        ctx.lineTo(b1.x, b1.y);
-        ctx.stroke();
-      }
+    // Painter's algorithm: build a flat list of segments with an iso-depth
+    // key (x+y; smaller = farther from the viewer) and draw far→near.
+    // The ribbon piece for a played segment is at the same depth as its
+    // track piece, +ε so the ribbon paints over the track at that depth.
+    const segs = [];
+    for (let i = 1; i < loc.length; i++) {
+      const a = loc[i - 1], b = loc[i];
+      const d = a.x + a.y + b.x + b.y;
+      segs.push({ d, kind: "track", a, b });
+      if (i <= upto) segs.push({ d: d + 1e-6, kind: "ribbon", a, b });
     }
 
-    // Car: ground shadow + raised marker so height jumps off the page.
-    if (loc.length) {
-      const x = interp(loc, t, "x");
-      const y = interp(loc, t, "y");
-      const z = heightAt(t);
-      const ground = projectXYZ(x, y, 0, w, h);
-      const air = projectXYZ(x, y, z, w, h);
+    // Insert the car as its own depth-sorted item so it occludes ribbon
+    // and track in front of it but is hidden by anything in front of it.
+    const cx = interp(loc, t, "x");
+    const cy = interp(loc, t, "y");
+    const cz = heightAt(t);
+    segs.push({ d: 2 * (cx + cy) + 2e-6, kind: "car", x: cx, y: cy, z: cz });
 
-      const driver = driversByNum[driverNumber] || {};
-      const teamColor = driver.team_colour ? `#${driver.team_colour}` : "#d6001c";
-      const acro = driver.name_acronym || "—";
+    segs.sort((s1, s2) => s1.d - s2.d);
 
-      // Shadow on ground plane.
-      ctx.beginPath();
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.ellipse(ground.x, ground.y, 9 * dpr, 4 * dpr, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Vertical drop line.
-      ctx.strokeStyle = withAlpha(teamColor, 0.5);
-      ctx.lineWidth = 1.5 * dpr;
-      ctx.beginPath();
-      ctx.moveTo(ground.x, ground.y);
-      ctx.lineTo(air.x, air.y);
-      ctx.stroke();
-
-      // Glow.
-      ctx.beginPath();
-      ctx.fillStyle = withAlpha(teamColor, 0.35);
-      ctx.arc(air.x, air.y, 14 * dpr, 0, Math.PI * 2);
-      ctx.fill();
-      // Dot.
-      ctx.beginPath();
-      ctx.fillStyle = teamColor;
-      ctx.strokeStyle = "#fff";
-      ctx.lineWidth = 2 * dpr;
-      ctx.arc(air.x, air.y, 7 * dpr, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      // Driver tag.
-      ctx.font = `${12 * dpr}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillStyle = "#fff";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`${acro} · ${driverNumber}`, air.x + 12 * dpr, air.y - 12 * dpr);
+    for (const s of segs) {
+      if (s.kind === "track") drawTrackSeg(s.a, s.b, w, h);
+      else if (s.kind === "ribbon") drawRibbonSeg(s.a, s.b, w, h);
+      else drawCarMarker(s.x, s.y, s.z, w, h);
     }
   }
 
