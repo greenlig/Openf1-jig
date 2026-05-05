@@ -296,14 +296,11 @@
     return `rgba(${r},${g},${b},${a})`;
   }
 
-  // Trail height in world units for a given lap-relative time.
+  // Trail height in world units at a given lap-relative time, from the
+  // pre-smoothed per-sample heights so the car marker matches the ribbon.
   function heightAt(t) {
-    if (!car.length) return 0;
-    const dt = 0.4;
-    const v1 = interp(car, Math.max(0, t - dt / 2), "speed") ?? 0;
-    const v2 = interp(car, Math.min(lapDuration, t + dt / 2), "speed") ?? 0;
-    const accel = (v2 - v1) / dt; // km/h per second
-    return (accel / aRange) * trackSize * HEIGHT_FRACTION;
+    if (!loc.length) return 0;
+    return interp(loc, t, "h") ?? 0;
   }
 
   function draw(t) {
@@ -603,19 +600,50 @@
     topSpeed = car.reduce((m, r) => Math.max(m, r.speed || 0), 0);
     if (topSpeed) $("top-speed").innerHTML = `${Math.round(topSpeed)}<span class="unit">km/h</span>`;
 
-    // World-space size in OpenF1 units, used to scale acceleration → height.
+    // PCA rotation: align the lap's principal axis with the world X axis.
+    // OpenF1 coords are arbitrary, so without this each track lands at a
+    // different rotation in iso space.
+    let mx = 0, my = 0;
+    for (const p of loc) { mx += p.x; my += p.y; }
+    mx /= loc.length; my /= loc.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const p of loc) {
+      const dx = p.x - mx, dy = p.y - my;
+      sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+    }
+    const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    const cosT = Math.cos(-theta), sinT = Math.sin(-theta);
+    for (const p of loc) {
+      const dx = p.x - mx, dy = p.y - my;
+      p.x = dx * cosT - dy * sinT;
+      p.y = dx * sinT + dy * cosT;
+    }
+
+    // World-space bounds drive the height scale and the iso projection.
     const worldBox = loc.reduce((b, p) => ({
       minX: Math.min(b.minX, p.x), maxX: Math.max(b.maxX, p.x),
       minY: Math.min(b.minY, p.y), maxY: Math.max(b.maxY, p.y),
     }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
     trackSize = Math.max(worldBox.maxX - worldBox.minX, worldBox.maxY - worldBox.minY) || 1;
 
-    // Acceleration per location sample (km/h per second, signed).
+    // Longitudinal acceleration per location sample (km/h per second, signed),
+    // then a centred moving average over ~1.1s to kill telemetry noise so the
+    // height tells the corner-vs-straight story instead of every gear shift.
     const dtA = 0.4;
-    const accel = loc.map(p => {
+    const rawAccel = loc.map(p => {
       const v1 = interp(car, Math.max(0, p.t - dtA / 2), "speed") ?? 0;
       const v2 = interp(car, Math.min(lap.lap_duration, p.t + dtA / 2), "speed") ?? 0;
       return (v2 - v1) / dtA;
+    });
+    const win = 5; // ~1.1s at OpenF1's ~3.7 Hz cadence
+    const half = Math.floor(win / 2);
+    const accel = rawAccel.map((_, i) => {
+      let sum = 0, n = 0;
+      for (let j = -half; j <= half; j++) {
+        const k = i + j;
+        if (k >= 0 && k < rawAccel.length) { sum += rawAccel[k]; n++; }
+      }
+      return sum / n;
     });
     aRange = Math.max(1, ...accel.map(a => Math.abs(a)));
     loc.forEach((p, i) => { p.h = (accel[i] / aRange) * trackSize * HEIGHT_FRACTION; });
