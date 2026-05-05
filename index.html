@@ -323,28 +323,50 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     lapGroup = new THREE.Group();
     scene.add(lapGroup);
 
-    // Ground plane: dark, large, slight grid for depth cue.
+    // Faint grid for spatial reference. No solid ground plane — that's what
+    // was occluding ribbon segments that dip below z=0 under braking.
     const groundSize = trackSize * 4;
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(groundSize, groundSize),
-      new THREE.MeshBasicMaterial({ color: 0x0e131c })
-    );
-    ground.position.z = -trackSize * 0.001;
-    lapGroup.add(ground);
-    const grid = new THREE.GridHelper(groundSize, 24, 0x1a2030, 0x12161f);
-    grid.rotation.x = Math.PI / 2; // GridHelper sits on XZ; rotate to XY (Z up).
-    grid.position.z = 0;
+    const grid = new THREE.GridHelper(groundSize, 24, 0x2a3346, 0x1a2030);
+    grid.rotation.x = Math.PI / 2; // GridHelper lies in XZ; rotate to XY (Z up).
     lapGroup.add(grid);
 
-    // Track tube along z=0.
-    const points = loc.map(p => new THREE.Vector3(p.x, p.y, 0));
-    const curve = new THREE.CatmullRomCurve3(points, true, "catmullrom", 0.05);
-    const tubeRadius = trackSize * 0.012;
-    const tube = new THREE.Mesh(
-      new THREE.TubeGeometry(curve, Math.min(2000, points.length * 3), tubeRadius, 10, true),
-      new THREE.MeshStandardMaterial({ color: 0x232a3a, roughness: 0.95, metalness: 0.0 })
-    );
-    lapGroup.add(tube);
+    // Flat extruded track lying on z=0. Built as a width-offset ribbon
+    // perpendicular to the lap's tangent at every sample. depthWrite:false so
+    // it never occludes the dipping (negative-h) ribbon underneath; the lap
+    // stays drawn as a solid line on the ground.
+    const N = loc.length;
+    const halfWidth = trackSize * 0.014;
+    const trackPos = new Float32Array(N * 2 * 3);
+    for (let i = 0; i < N; i++) {
+      const prev = loc[(i - 1 + N) % N];
+      const next = loc[(i + 1) % N];
+      const tx = next.x - prev.x, ty = next.y - prev.y;
+      const len = Math.hypot(tx, ty) || 1;
+      const nx = -ty / len * halfWidth;
+      const ny =  tx / len * halfWidth;
+      const p = loc[i];
+      trackPos[i*6+0] = p.x + nx; trackPos[i*6+1] = p.y + ny; trackPos[i*6+2] = 0;
+      trackPos[i*6+3] = p.x - nx; trackPos[i*6+4] = p.y - ny; trackPos[i*6+5] = 0;
+    }
+    const trackIdx = [];
+    for (let i = 0; i < N - 1; i++) {
+      const a0 = i * 2, a1 = a0 + 1, b0 = (i + 1) * 2, b1 = b0 + 1;
+      trackIdx.push(a0, b0, a1, b0, b1, a1);
+    }
+    const trackGeom = new THREE.BufferGeometry();
+    trackGeom.setAttribute('position', new THREE.BufferAttribute(trackPos, 3));
+    trackGeom.setIndex(trackIdx);
+    trackGeom.computeVertexNormals();
+    const trackMesh = new THREE.Mesh(trackGeom, new THREE.MeshStandardMaterial({
+      color: 0x2a3346,
+      roughness: 0.95,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }));
+    lapGroup.add(trackMesh);
 
     // Ribbon mesh: 2 vertices per loc (z=0 ground, z=h lifted), vertex-coloured.
     const N = loc.length;
@@ -373,12 +395,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     ribbonGeom.computeVertexNormals();
     const ribbonMat = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      transparent: true,
-      opacity: 0.9,
       side: THREE.DoubleSide,
       roughness: 0.55,
       metalness: 0.0,
-      emissiveIntensity: 0.0,
     });
     lapGroup.add(new THREE.Mesh(ribbonGeom, ribbonMat));
 
