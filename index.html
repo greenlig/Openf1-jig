@@ -133,6 +133,9 @@
     <div class="overlay" id="overlay">
       <div id="overlay-meta"><strong>Loading…</strong></div>
       <div id="overlay-time">t = 0.00s / 0.00s</div>
+      <div style="margin-top: 6px; color: var(--muted); font-size: 11px;">
+        Height = longitudinal acceleration · up = on the throttle, down = braking
+      </div>
     </div>
   </div>
 
@@ -246,8 +249,17 @@
   const canvas = $("track");
   const ctx = canvas.getContext("2d");
   let dpr = Math.max(1, window.devicePixelRatio || 1);
-  let trackPath = []; // array of {x,y} normalized to canvas
-  let bbox = null;
+  let trackPath = []; // [{x,y}] world coords
+  let bbox = null;    // iso-space bbox after projection
+  const ISO_COS = Math.cos(Math.PI / 6); // ≈0.866
+  const ISO_SIN = Math.sin(Math.PI / 6); // 0.5
+  const HEIGHT_FRACTION = 0.18;          // peak trail height as fraction of track size
+  let trackSize = 1;                     // larger of bbox X/Y in world units
+  let aRange = 1;                        // peak |accel| in km/h per second
+
+  function isoRaw(x, y, z) {
+    return { ix: (x - y) * ISO_COS, iy: (x + y) * ISO_SIN - z };
+  }
 
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
@@ -256,7 +268,8 @@
   }
   window.addEventListener("resize", () => { resizeCanvas(); draw(currentT); });
 
-  function project(pt, w, h) {
+  // Map an iso-space (ix, iy) to canvas pixels using current bbox.
+  function toScreen(ix, iy, w, h) {
     if (!bbox) return { x: 0, y: 0 };
     const pad = 30 * dpr;
     const sx = (w - 2 * pad) / (bbox.maxX - bbox.minX || 1);
@@ -264,88 +277,145 @@
     const s = Math.min(sx, sy);
     const cx = (w - s * (bbox.maxX - bbox.minX)) / 2;
     const cy = (h - s * (bbox.maxY - bbox.minY)) / 2;
-    return {
-      x: cx + (pt.x - bbox.minX) * s,
-      // OpenF1 y axis: invert so the track reads naturally
-      y: cy + (bbox.maxY - pt.y) * s,
-    };
+    return { x: cx + (ix - bbox.minX) * s, y: cy + (iy - bbox.minY) * s };
+  }
+  function projectXYZ(x, y, z, w, h) {
+    const r = isoRaw(x, y, z);
+    return toScreen(r.ix, r.iy, w, h);
+  }
+
+  function colorFor(thr, brk) {
+    if (brk > 30) return "#ff2d6f";
+    if (thr > 80) return "#41d39a";
+    if (thr > 30) return "#ffd34d";
+    return "#5aa9ff";
+  }
+  function withAlpha(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    return `rgba(${r},${g},${b},${a})`;
+  }
+
+  // Trail height in world units for a given lap-relative time.
+  function heightAt(t) {
+    if (!car.length) return 0;
+    const dt = 0.4;
+    const v1 = interp(car, Math.max(0, t - dt / 2), "speed") ?? 0;
+    const v2 = interp(car, Math.min(lapDuration, t + dt / 2), "speed") ?? 0;
+    const accel = (v2 - v1) / dt; // km/h per second
+    return (accel / aRange) * trackSize * HEIGHT_FRACTION;
   }
 
   function draw(t) {
     const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#0b0d12";
+    ctx.fillRect(0, 0, w, h);
     if (!trackPath.length) return;
 
-    // Track outline
-    ctx.lineWidth = 14 * dpr;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
+
+    // Ground baseline (z=0) — full closed lap, drawn first so the 3D ribbon sits on top.
+    ctx.lineWidth = 12 * dpr;
     ctx.strokeStyle = "#1f2636";
     ctx.beginPath();
     for (let i = 0; i < trackPath.length; i++) {
-      const p = project(trackPath[i], w, h);
+      const p = projectXYZ(trackPath[i].x, trackPath[i].y, 0, w, h);
       if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
     }
     ctx.stroke();
-
-    // Inner racing line, thinner
-    ctx.lineWidth = 2 * dpr;
+    ctx.lineWidth = 1.5 * dpr;
     ctx.strokeStyle = "#2a3346";
     ctx.stroke();
 
-    // Progress trail up to time t, coloured by throttle/brake
+    // Played-back 3D ribbon: a coloured wall between baseline and trail height.
     if (loc.length) {
-      let i = 0;
-      while (i < loc.length - 1 && loc[i + 1].t <= t) i++;
-      ctx.lineWidth = 4 * dpr;
-      for (let k = 1; k <= i; k++) {
-        const a = project(loc[k - 1], w, h);
-        const b = project(loc[k], w, h);
-        const tk = loc[k].t;
+      let upto = 0;
+      while (upto < loc.length - 1 && loc[upto + 1].t <= t) upto++;
+
+      // Walls (filled quads), so depth + colour read clearly.
+      for (let k = 1; k <= upto; k++) {
+        const a = loc[k - 1], b = loc[k];
+        const a0 = projectXYZ(a.x, a.y, 0, w, h);
+        const b0 = projectXYZ(b.x, b.y, 0, w, h);
+        const a1 = projectXYZ(a.x, a.y, a.h, w, h);
+        const b1 = projectXYZ(b.x, b.y, b.h, w, h);
+        const tk = b.t;
         const thr = nearest(car, tk, "throttle") ?? 0;
         const brk = nearest(car, tk, "brake") ?? 0;
-        let col;
-        if (brk > 30) col = "#ff2d6f";
-        else if (thr > 80) col = "#41d39a";
-        else if (thr > 30) col = "#ffd34d";
-        else col = "#5aa9ff";
-        ctx.strokeStyle = col;
+        const col = colorFor(thr, brk);
+        ctx.fillStyle = withAlpha(col, 0.30);
         ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
+        ctx.moveTo(a0.x, a0.y);
+        ctx.lineTo(b0.x, b0.y);
+        ctx.lineTo(b1.x, b1.y);
+        ctx.lineTo(a1.x, a1.y);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Top edge of the ribbon — solid coloured stroke.
+      ctx.lineWidth = 3 * dpr;
+      for (let k = 1; k <= upto; k++) {
+        const a = loc[k - 1], b = loc[k];
+        const a1 = projectXYZ(a.x, a.y, a.h, w, h);
+        const b1 = projectXYZ(b.x, b.y, b.h, w, h);
+        const tk = b.t;
+        const thr = nearest(car, tk, "throttle") ?? 0;
+        const brk = nearest(car, tk, "brake") ?? 0;
+        ctx.strokeStyle = colorFor(thr, brk);
+        ctx.beginPath();
+        ctx.moveTo(a1.x, a1.y);
+        ctx.lineTo(b1.x, b1.y);
         ctx.stroke();
       }
     }
 
-    // Car position
+    // Car: ground shadow + raised marker so height jumps off the page.
     if (loc.length) {
       const x = interp(loc, t, "x");
       const y = interp(loc, t, "y");
-      const p = project({ x, y }, w, h);
+      const z = heightAt(t);
+      const ground = projectXYZ(x, y, 0, w, h);
+      const air = projectXYZ(x, y, z, w, h);
 
       const driver = driversByNum[driverNumber] || {};
       const teamColor = driver.team_colour ? `#${driver.team_colour}` : "#d6001c";
       const acro = driver.name_acronym || "—";
 
-      // Glow
+      // Shadow on ground plane.
       ctx.beginPath();
-      ctx.fillStyle = teamColor + "44";
-      ctx.arc(p.x, p.y, 14 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.ellipse(ground.x, ground.y, 9 * dpr, 4 * dpr, 0, 0, Math.PI * 2);
       ctx.fill();
-      // Dot
+
+      // Vertical drop line.
+      ctx.strokeStyle = withAlpha(teamColor, 0.5);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(ground.x, ground.y);
+      ctx.lineTo(air.x, air.y);
+      ctx.stroke();
+
+      // Glow.
+      ctx.beginPath();
+      ctx.fillStyle = withAlpha(teamColor, 0.35);
+      ctx.arc(air.x, air.y, 14 * dpr, 0, Math.PI * 2);
+      ctx.fill();
+      // Dot.
       ctx.beginPath();
       ctx.fillStyle = teamColor;
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 2 * dpr;
-      ctx.arc(p.x, p.y, 7 * dpr, 0, Math.PI * 2);
+      ctx.arc(air.x, air.y, 7 * dpr, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      // Driver tag
+      // Driver tag.
       ctx.font = `${12 * dpr}px ui-sans-serif, system-ui, sans-serif`;
       ctx.fillStyle = "#fff";
       ctx.textBaseline = "middle";
-      ctx.fillText(`${acro} · ${driverNumber}`, p.x + 12 * dpr, p.y - 12 * dpr);
+      ctx.fillText(`${acro} · ${driverNumber}`, air.x + 12 * dpr, air.y - 12 * dpr);
     }
   }
 
@@ -533,10 +603,37 @@
     topSpeed = car.reduce((m, r) => Math.max(m, r.speed || 0), 0);
     if (topSpeed) $("top-speed").innerHTML = `${Math.round(topSpeed)}<span class="unit">km/h</span>`;
 
-    bbox = loc.reduce((b, p) => ({
+    // World-space size in OpenF1 units, used to scale acceleration → height.
+    const worldBox = loc.reduce((b, p) => ({
       minX: Math.min(b.minX, p.x), maxX: Math.max(b.maxX, p.x),
       minY: Math.min(b.minY, p.y), maxY: Math.max(b.maxY, p.y),
     }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+    trackSize = Math.max(worldBox.maxX - worldBox.minX, worldBox.maxY - worldBox.minY) || 1;
+
+    // Acceleration per location sample (km/h per second, signed).
+    const dtA = 0.4;
+    const accel = loc.map(p => {
+      const v1 = interp(car, Math.max(0, p.t - dtA / 2), "speed") ?? 0;
+      const v2 = interp(car, Math.min(lap.lap_duration, p.t + dtA / 2), "speed") ?? 0;
+      return (v2 - v1) / dtA;
+    });
+    aRange = Math.max(1, ...accel.map(a => Math.abs(a)));
+    loc.forEach((p, i) => { p.h = (accel[i] / aRange) * trackSize * HEIGHT_FRACTION; });
+
+    // Iso-space bbox covers both ground (z=0) and the lifted ribbon, so nothing clips.
+    bbox = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+    const expand = (ix, iy) => {
+      if (ix < bbox.minX) bbox.minX = ix;
+      if (ix > bbox.maxX) bbox.maxX = ix;
+      if (iy < bbox.minY) bbox.minY = iy;
+      if (iy > bbox.maxY) bbox.maxY = iy;
+    };
+    for (const p of loc) {
+      const g = isoRaw(p.x, p.y, 0);
+      const a = isoRaw(p.x, p.y, p.h);
+      expand(g.ix, g.iy); expand(a.ix, a.iy);
+    }
+
     trackPath = loc.map(p => ({ x: p.x, y: p.y }));
 
     currentT = 0;
