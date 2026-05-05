@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Bortoleto · Miami 2026 · Fastest Lap (L56)</title>
+<title>Miami GP 2026 · Driver fastest laps</title>
 <style>
   :root {
     --bg: #0b0d12;
@@ -28,11 +28,19 @@
   header .badge {
     background: var(--audi); color: #fff; font-weight: 800;
     border-radius: 4px; padding: 4px 8px; font-size: 12px; letter-spacing: 0.05em;
+    min-width: 30px; text-align: center;
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   header h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
   header .spacer { flex: 1; }
   header .status { color: var(--muted); font-size: 12px; }
+  .driver-picker { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .driver-picker select {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--grid);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; min-width: 200px;
+    font-weight: 500;
+  }
+  .driver-picker select:disabled { opacity: 0.5; cursor: progress; }
   main {
     flex: 1; display: grid; grid-template-columns: 1fr 320px; gap: 16px;
     padding: 16px; min-height: 0;
@@ -109,9 +117,13 @@
 </head>
 <body>
 <header>
-  <span class="badge">#5</span>
-  <h1>Gabriel Bortoleto · Audi <small>Miami GP 2026 · Fastest personal lap (L56)</small></h1>
+  <span class="badge" id="badge">#5</span>
+  <h1 id="title">Loading… <small id="subtitle">Miami GP 2026</small></h1>
   <span class="spacer"></span>
+  <label class="driver-picker">
+    <span>Driver</span>
+    <select id="driver" disabled><option>Loading drivers…</option></select>
+  </label>
   <span class="status" id="status">Loading…</span>
 </header>
 
@@ -119,7 +131,7 @@
   <div class="stage">
     <canvas id="track"></canvas>
     <div class="overlay" id="overlay">
-      <div><strong>Lap 56</strong> · session 11280 · driver #5</div>
+      <div id="overlay-meta"><strong>Loading…</strong></div>
       <div id="overlay-time">t = 0.00s / 0.00s</div>
     </div>
   </div>
@@ -176,9 +188,11 @@
 <script>
 (() => {
   const SESSION_KEY = 11280;
-  const DRIVER_NUMBER = 5;
-  const LAP_NUMBER = 56;
   const API = "https://api.openf1.org/v1";
+  let driverNumber = 5;     // default = Bortoleto
+  let lapNumber = null;     // resolved per driver = their fastest lap
+  let driversByNum = {};    // { 5: {full_name, team_colour, name_acronym, ...} }
+  let loadToken = 0;        // race-condition guard for switching drivers
 
   const $ = (id) => document.getElementById(id);
   const status = $("status");
@@ -309,14 +323,18 @@
       const y = interp(loc, t, "y");
       const p = project({ x, y }, w, h);
 
+      const driver = driversByNum[driverNumber] || {};
+      const teamColor = driver.team_colour ? `#${driver.team_colour}` : "#d6001c";
+      const acro = driver.name_acronym || "—";
+
       // Glow
       ctx.beginPath();
-      ctx.fillStyle = "rgba(214, 0, 28, 0.25)";
+      ctx.fillStyle = teamColor + "44";
       ctx.arc(p.x, p.y, 14 * dpr, 0, Math.PI * 2);
       ctx.fill();
       // Dot
       ctx.beginPath();
-      ctx.fillStyle = "#d6001c";
+      ctx.fillStyle = teamColor;
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 2 * dpr;
       ctx.arc(p.x, p.y, 7 * dpr, 0, Math.PI * 2);
@@ -327,7 +345,7 @@
       ctx.font = `${12 * dpr}px ui-sans-serif, system-ui, sans-serif`;
       ctx.fillStyle = "#fff";
       ctx.textBaseline = "middle";
-      ctx.fillText("BOR · 5", p.x + 12 * dpr, p.y - 12 * dpr);
+      ctx.fillText(`${acro} · ${driverNumber}`, p.x + 12 * dpr, p.y - 12 * dpr);
     }
   }
 
@@ -412,61 +430,127 @@
   });
   $("rate").addEventListener("change", (e) => { rate = Number(e.target.value); });
 
-  async function load() {
+  function applyDriverChrome(driver) {
+    const teamColor = driver?.team_colour ? `#${driver.team_colour}` : "#d6001c";
+    const badge = $("badge");
+    badge.style.background = teamColor;
+    badge.textContent = `#${driver?.driver_number ?? driverNumber}`;
+    const name = driver?.full_name || driver?.broadcast_name || "Driver";
+    const team = driver?.team_name || "";
+    $("title").innerHTML =
+      `${name}${team ? " · " + team : ""} <small id="subtitle">Miami GP 2026 · Fastest personal lap</small>`;
+  }
+
+  function findFastestLap(laps) {
+    return laps
+      .filter(l => Number.isFinite(l.lap_duration) && !l.is_pit_out_lap)
+      .sort((a, b) => a.lap_duration - b.lap_duration)[0];
+  }
+
+  async function loadDrivers() {
+    setStatus("Loading drivers…");
+    const rows = await fetchJSON(`${API}/drivers?session_key=${SESSION_KEY}`);
+    rows.sort((a, b) => (a.team_name || "").localeCompare(b.team_name || "")
+      || (a.full_name || "").localeCompare(b.full_name || ""));
+    driversByNum = Object.fromEntries(rows.map(d => [d.driver_number, d]));
+    const sel = $("driver");
+    sel.innerHTML = "";
+    for (const d of rows) {
+      const opt = document.createElement("option");
+      opt.value = String(d.driver_number);
+      opt.textContent = `#${d.driver_number} ${d.full_name || d.broadcast_name} · ${d.team_name || ""}`;
+      sel.appendChild(opt);
+    }
+    sel.value = String(driverNumber);
+    sel.disabled = false;
+    sel.addEventListener("change", () => {
+      driverNumber = Number(sel.value);
+      pause();
+      currentT = 0;
+      $("scrub").value = "0";
+      loadDriver(driverNumber);
+    });
+  }
+
+  async function loadDriver(num) {
+    const token = ++loadToken;
+    const driver = driversByNum[num];
+    applyDriverChrome(driver);
     try {
-      setStatus("Loading lap…");
-      const lapRows = await fetchJSON(`${API}/laps?session_key=${SESSION_KEY}&driver_number=${DRIVER_NUMBER}&lap_number=${LAP_NUMBER}`);
-      if (!lapRows.length) throw new Error("No lap data returned");
-      lap = lapRows[0];
-      lapDuration = lap.lap_duration;
-      $("lap-time").textContent = fmtLap(lap.lap_duration);
-      $("s1").textContent = fmtSec(lap.duration_sector_1);
-      $("s2").textContent = fmtSec(lap.duration_sector_2);
-      $("s3").textContent = fmtSec(lap.duration_sector_3);
-      $("top-speed").innerHTML = `${lap.st_speed ?? "—"}<span class="unit">km/h</span>`;
+      setStatus(`Finding fastest lap for ${driver?.name_acronym || "#" + num}…`);
+      const laps = await fetchJSON(`${API}/laps?session_key=${SESSION_KEY}&driver_number=${num}`);
+      if (token !== loadToken) return;
+      const fastest = findFastestLap(laps);
+      if (!fastest) throw new Error("No timed laps for this driver");
+      lapNumber = fastest.lap_number;
+      await loadLap(num, fastest, token);
+    } catch (e) {
+      if (token !== loadToken) return;
+      console.error(e);
+      setStatus("Error: " + e.message);
+    }
+  }
 
-      const lapStart = new Date(lap.date_start);
-      // pad slightly so we capture the exact endpoints
-      const padMs = 250;
-      const startISO = new Date(lapStart.getTime() - padMs).toISOString();
-      const endISO = new Date(lapStart.getTime() + lap.lap_duration * 1000 + padMs).toISOString();
+  async function loadLap(num, lapRow, token) {
+    lap = lapRow;
+    lapDuration = lap.lap_duration;
+    $("lap-time").textContent = fmtLap(lap.lap_duration);
+    $("s1").textContent = fmtSec(lap.duration_sector_1);
+    $("s2").textContent = fmtSec(lap.duration_sector_2);
+    $("s3").textContent = fmtSec(lap.duration_sector_3);
+    $("top-speed").innerHTML = `${lap.st_speed ?? "—"}<span class="unit">km/h</span>`;
+    $("overlay-meta").innerHTML =
+      `<strong>Lap ${lap.lap_number}</strong> · ${driversByNum[num]?.name_acronym || "#" + num} · session ${SESSION_KEY}`;
 
-      setStatus("Loading location & telemetry…");
-      const [locRows, carRows] = await Promise.all([
-        fetchJSON(`${API}/location?session_key=${SESSION_KEY}&driver_number=${DRIVER_NUMBER}&date>=${startISO}&date<=${endISO}`),
-        fetchJSON(`${API}/car_data?session_key=${SESSION_KEY}&driver_number=${DRIVER_NUMBER}&date>=${startISO}&date<=${endISO}`),
-      ]);
+    const lapStart = new Date(lap.date_start);
+    const padMs = 250;
+    const startISO = new Date(lapStart.getTime() - padMs).toISOString();
+    const endISO = new Date(lapStart.getTime() + lap.lap_duration * 1000 + padMs).toISOString();
 
-      const lapStartMs = lapStart.getTime();
-      loc = locRows
-        .map(r => ({ t: (new Date(r.date).getTime() - lapStartMs) / 1000, x: r.x, y: r.y }))
-        .filter(r => r.t >= 0 && r.t <= lap.lap_duration && Number.isFinite(r.x) && Number.isFinite(r.y))
-        .sort((a, b) => a.t - b.t);
+    setStatus("Loading location & telemetry…");
+    const [locRows, carRows] = await Promise.all([
+      fetchJSON(`${API}/location?session_key=${SESSION_KEY}&driver_number=${num}&date>=${startISO}&date<=${endISO}`),
+      fetchJSON(`${API}/car_data?session_key=${SESSION_KEY}&driver_number=${num}&date>=${startISO}&date<=${endISO}`),
+    ]);
+    if (token !== loadToken) return;
 
-      car = carRows
-        .map(r => ({
-          t: (new Date(r.date).getTime() - lapStartMs) / 1000,
-          speed: r.speed, throttle: r.throttle, brake: r.brake,
-          gear: r.n_gear, rpm: r.rpm, drs: r.drs,
-        }))
-        .filter(r => r.t >= 0 && r.t <= lap.lap_duration)
-        .sort((a, b) => a.t - b.t);
+    const lapStartMs = lapStart.getTime();
+    loc = locRows
+      .map(r => ({ t: (new Date(r.date).getTime() - lapStartMs) / 1000, x: r.x, y: r.y }))
+      .filter(r => r.t >= 0 && r.t <= lap.lap_duration && Number.isFinite(r.x) && Number.isFinite(r.y))
+      .sort((a, b) => a.t - b.t);
 
-      if (!loc.length) throw new Error("No location samples in lap window");
-      topSpeed = car.reduce((m, r) => Math.max(m, r.speed || 0), 0);
-      if (topSpeed) $("top-speed").innerHTML = `${Math.round(topSpeed)}<span class="unit">km/h</span>`;
+    car = carRows
+      .map(r => ({
+        t: (new Date(r.date).getTime() - lapStartMs) / 1000,
+        speed: r.speed, throttle: r.throttle, brake: r.brake,
+        gear: r.n_gear, rpm: r.rpm, drs: r.drs,
+      }))
+      .filter(r => r.t >= 0 && r.t <= lap.lap_duration)
+      .sort((a, b) => a.t - b.t);
 
-      // Compute bbox for projection and seed track outline from this lap's points
-      bbox = loc.reduce((b, p) => ({
-        minX: Math.min(b.minX, p.x), maxX: Math.max(b.maxX, p.x),
-        minY: Math.min(b.minY, p.y), maxY: Math.max(b.maxY, p.y),
-      }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
-      trackPath = loc.map(p => ({ x: p.x, y: p.y }));
+    if (!loc.length) throw new Error("No location samples in lap window");
+    topSpeed = car.reduce((m, r) => Math.max(m, r.speed || 0), 0);
+    if (topSpeed) $("top-speed").innerHTML = `${Math.round(topSpeed)}<span class="unit">km/h</span>`;
 
-      resizeCanvas();
-      draw(0);
-      updatePanels(0);
-      setStatus(`Loaded · ${loc.length} location pts · ${car.length} telemetry pts`);
+    bbox = loc.reduce((b, p) => ({
+      minX: Math.min(b.minX, p.x), maxX: Math.max(b.maxX, p.x),
+      minY: Math.min(b.minY, p.y), maxY: Math.max(b.maxY, p.y),
+    }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+    trackPath = loc.map(p => ({ x: p.x, y: p.y }));
+
+    currentT = 0;
+    $("scrub").value = "0";
+    resizeCanvas();
+    draw(0);
+    updatePanels(0);
+    setStatus(`Loaded L${lap.lap_number} · ${fmtLap(lap.lap_duration)} · ${loc.length} loc pts · ${car.length} telemetry pts`);
+  }
+
+  async function init() {
+    try {
+      await loadDrivers();
+      await loadDriver(driverNumber);
     } catch (e) {
       console.error(e);
       setStatus("Error: " + e.message);
@@ -478,7 +562,7 @@
     }
   }
 
-  load();
+  init();
 })();
 </script>
 </body>
