@@ -4,6 +4,14 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Miami GP 2026 · Driver fastest laps</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.1/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.1/examples/jsm/"
+  }
+}
+</script>
 <style>
   :root {
     --bg: #0b0d12;
@@ -55,7 +63,9 @@
     position: absolute; left: 12px; top: 12px; padding: 8px 10px;
     background: rgba(10, 12, 18, 0.6); border: 1px solid var(--grid);
     border-radius: 8px; font-size: 12px; color: var(--muted); backdrop-filter: blur(6px);
+    pointer-events: none; user-select: none;
   }
+  .stage canvas { touch-action: none; }
   .stage .overlay strong { color: var(--ink); }
   .panel {
     background: var(--panel); border: 1px solid var(--grid); border-radius: 12px;
@@ -136,6 +146,9 @@
       <div style="margin-top: 6px; color: var(--muted); font-size: 11px;">
         Height = longitudinal acceleration · up = on the throttle, down = braking
       </div>
+      <div style="margin-top: 4px; color: var(--muted); font-size: 11px;">
+        Drag to orbit · pinch / scroll to zoom · two-finger drag to pan
+      </div>
     </div>
   </div>
 
@@ -188,8 +201,11 @@
   Unofficial fan/research data — not a licensed F1 feed.
 </footer>
 
-<script>
-(() => {
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+{
   const SESSION_KEY = 11280;
   const API = "https://api.openf1.org/v1";
   let driverNumber = 5;     // default = Bortoleto
@@ -245,178 +261,192 @@
     return (t - a.t) < (b.t - t) ? a[key] : b[key];
   }
 
-  // ---- Canvas rendering ----
+  // ---- WebGL rendering (true 3D via Three.js) ----
   const canvas = $("track");
-  const ctx = canvas.getContext("2d");
-  let dpr = Math.max(1, window.devicePixelRatio || 1);
-  let trackPath = []; // [{x,y}] world coords
-  let bbox = null;    // iso-space bbox after projection
-  const ISO_COS = Math.cos(Math.PI / 6); // ≈0.866
-  const ISO_SIN = Math.sin(Math.PI / 6); // 0.5
-  const HEIGHT_FRACTION = 0.18;          // peak trail height as fraction of track size
-  let trackSize = 1;                     // larger of bbox X/Y in world units
-  let aRange = 1;                        // peak |accel| in km/h per second
+  const HEIGHT_FRACTION = 0.18;
+  let trackSize = 1;
+  let aRange = 1;
 
-  function isoRaw(x, y, z) {
-    return { ix: (x - y) * ISO_COS, iy: (x + y) * ISO_SIN - z };
-  }
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
-  function resizeCanvas() {
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = Math.floor(rect.width * dpr);
-    canvas.height = Math.floor(rect.height * dpr);
-  }
-  window.addEventListener("resize", () => { resizeCanvas(); draw(currentT); });
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b0d12);
+  scene.fog = new THREE.Fog(0x0b0d12, 1, 1e5);
 
-  // Map an iso-space (ix, iy) to canvas pixels using current bbox.
-  function toScreen(ix, iy, w, h) {
-    if (!bbox) return { x: 0, y: 0 };
-    const pad = 30 * dpr;
-    const sx = (w - 2 * pad) / (bbox.maxX - bbox.minX || 1);
-    const sy = (h - 2 * pad) / (bbox.maxY - bbox.minY || 1);
-    const s = Math.min(sx, sy);
-    const cx = (w - s * (bbox.maxX - bbox.minX)) / 2;
-    const cy = (h - s * (bbox.maxY - bbox.minY)) / 2;
-    return { x: cx + (ix - bbox.minX) * s, y: cy + (iy - bbox.minY) * s };
-  }
-  function projectXYZ(x, y, z, w, h) {
-    const r = isoRaw(x, y, z);
-    return toScreen(r.ix, r.iy, w, h);
-  }
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 1e6);
+  camera.up.set(0, 0, 1);
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.screenSpacePanning = false;
+  controls.minDistance = 1;
+  controls.maxDistance = 1e5;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
+  keyLight.position.set(1, 1.5, 2);
+  scene.add(keyLight);
+  const rimLight = new THREE.DirectionalLight(0x6a8cff, 0.25);
+  rimLight.position.set(-1, -1, 1);
+  scene.add(rimLight);
+
+  let lapGroup = null;     // disposable per-lap geometry
+  let ribbonGeom = null;   // BufferGeometry of the lap ribbon
+  let carObj = null, carShadow = null;
 
   function colorFor(thr, brk) {
-    if (brk > 30) return "#ff2d6f";
-    if (thr > 80) return "#41d39a";
-    if (thr > 30) return "#ffd34d";
-    return "#5aa9ff";
-  }
-  function withAlpha(hex, a) {
-    const n = parseInt(hex.slice(1), 16);
-    const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-    return `rgba(${r},${g},${b},${a})`;
+    if (brk > 30) return new THREE.Color(0xff2d6f);
+    if (thr > 80) return new THREE.Color(0x41d39a);
+    if (thr > 30) return new THREE.Color(0xffd34d);
+    return new THREE.Color(0x5aa9ff);
   }
 
-  // Trail height in world units at a given lap-relative time, from the
-  // pre-smoothed per-sample heights so the car marker matches the ribbon.
-  function heightAt(t) {
-    if (!loc.length) return 0;
-    return interp(loc, t, "h") ?? 0;
+  function disposeLap() {
+    if (lapGroup) {
+      lapGroup.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+          (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+        }
+      });
+      scene.remove(lapGroup);
+      lapGroup = null;
+    }
+    if (carObj)    { carObj.geometry.dispose();    carObj.material.dispose();    scene.remove(carObj);    carObj = null; }
+    if (carShadow) { carShadow.geometry.dispose(); carShadow.material.dispose(); scene.remove(carShadow); carShadow = null; }
+    ribbonGeom = null;
   }
 
-  function drawTrackSeg(a, b, w, h) {
-    const ap = projectXYZ(a.x, a.y, 0, w, h);
-    const bp = projectXYZ(b.x, b.y, 0, w, h);
-    ctx.lineWidth = 12 * dpr;
-    ctx.strokeStyle = "#1f2636";
-    ctx.beginPath();
-    ctx.moveTo(ap.x, ap.y);
-    ctx.lineTo(bp.x, bp.y);
-    ctx.stroke();
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.strokeStyle = "#2a3346";
-    ctx.beginPath();
-    ctx.moveTo(ap.x, ap.y);
-    ctx.lineTo(bp.x, bp.y);
-    ctx.stroke();
-  }
+  function buildLapScene() {
+    disposeLap();
+    lapGroup = new THREE.Group();
+    scene.add(lapGroup);
 
-  function drawRibbonSeg(a, b, w, h) {
-    const a0 = projectXYZ(a.x, a.y, 0, w, h);
-    const b0 = projectXYZ(b.x, b.y, 0, w, h);
-    const a1 = projectXYZ(a.x, a.y, a.h, w, h);
-    const b1 = projectXYZ(b.x, b.y, b.h, w, h);
-    const thr = nearest(car, b.t, "throttle") ?? 0;
-    const brk = nearest(car, b.t, "brake") ?? 0;
-    const col = colorFor(thr, brk);
-    ctx.fillStyle = withAlpha(col, 0.30);
-    ctx.beginPath();
-    ctx.moveTo(a0.x, a0.y);
-    ctx.lineTo(b0.x, b0.y);
-    ctx.lineTo(b1.x, b1.y);
-    ctx.lineTo(a1.x, a1.y);
-    ctx.closePath();
-    ctx.fill();
-    ctx.lineWidth = 3 * dpr;
-    ctx.strokeStyle = col;
-    ctx.beginPath();
-    ctx.moveTo(a1.x, a1.y);
-    ctx.lineTo(b1.x, b1.y);
-    ctx.stroke();
-  }
+    // Ground plane: dark, large, slight grid for depth cue.
+    const groundSize = trackSize * 4;
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(groundSize, groundSize),
+      new THREE.MeshBasicMaterial({ color: 0x0e131c })
+    );
+    ground.position.z = -trackSize * 0.001;
+    lapGroup.add(ground);
+    const grid = new THREE.GridHelper(groundSize, 24, 0x1a2030, 0x12161f);
+    grid.rotation.x = Math.PI / 2; // GridHelper sits on XZ; rotate to XY (Z up).
+    grid.position.z = 0;
+    lapGroup.add(grid);
 
-  function drawCarMarker(x, y, z, w, h) {
-    const ground = projectXYZ(x, y, 0, w, h);
-    const air = projectXYZ(x, y, z, w, h);
+    // Track tube along z=0.
+    const points = loc.map(p => new THREE.Vector3(p.x, p.y, 0));
+    const curve = new THREE.CatmullRomCurve3(points, true, "catmullrom", 0.05);
+    const tubeRadius = trackSize * 0.012;
+    const tube = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, Math.min(2000, points.length * 3), tubeRadius, 10, true),
+      new THREE.MeshStandardMaterial({ color: 0x232a3a, roughness: 0.95, metalness: 0.0 })
+    );
+    lapGroup.add(tube);
+
+    // Ribbon mesh: 2 vertices per loc (z=0 ground, z=h lifted), vertex-coloured.
+    const N = loc.length;
+    const positions = new Float32Array(N * 2 * 3);
+    const colors = new Float32Array(N * 2 * 3);
+    for (let i = 0; i < N; i++) {
+      const p = loc[i];
+      positions[i*6+0] = p.x; positions[i*6+1] = p.y; positions[i*6+2] = 0;
+      positions[i*6+3] = p.x; positions[i*6+4] = p.y; positions[i*6+5] = p.h;
+      const thr = nearest(car, p.t, "throttle") ?? 0;
+      const brk = nearest(car, p.t, "brake") ?? 0;
+      const c = colorFor(thr, brk);
+      colors[i*6+0] = c.r; colors[i*6+1] = c.g; colors[i*6+2] = c.b;
+      colors[i*6+3] = c.r; colors[i*6+4] = c.g; colors[i*6+5] = c.b;
+    }
+    const indices = [];
+    for (let i = 1; i < N; i++) {
+      const a0 = (i - 1) * 2, a1 = a0 + 1, b0 = i * 2, b1 = b0 + 1;
+      indices.push(a0, b0, a1, b0, b1, a1);
+    }
+    ribbonGeom = new THREE.BufferGeometry();
+    ribbonGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    ribbonGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    ribbonGeom.setIndex(indices);
+    ribbonGeom.setDrawRange(0, 0);
+    ribbonGeom.computeVertexNormals();
+    const ribbonMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      roughness: 0.55,
+      metalness: 0.0,
+      emissiveIntensity: 0.0,
+    });
+    lapGroup.add(new THREE.Mesh(ribbonGeom, ribbonMat));
+
+    // Car marker: emissive sphere in team colour + flat ground shadow.
     const driver = driversByNum[driverNumber] || {};
-    const teamColor = driver.team_colour ? `#${driver.team_colour}` : "#d6001c";
-    const acro = driver.name_acronym || "—";
-    ctx.beginPath();
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    ctx.ellipse(ground.x, ground.y, 9 * dpr, 4 * dpr, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = withAlpha(teamColor, 0.5);
-    ctx.lineWidth = 1.5 * dpr;
-    ctx.beginPath();
-    ctx.moveTo(ground.x, ground.y);
-    ctx.lineTo(air.x, air.y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.fillStyle = withAlpha(teamColor, 0.35);
-    ctx.arc(air.x, air.y, 14 * dpr, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.fillStyle = teamColor;
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 2 * dpr;
-    ctx.arc(air.x, air.y, 7 * dpr, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.font = `${12 * dpr}px ui-sans-serif, system-ui, sans-serif`;
-    ctx.fillStyle = "#fff";
-    ctx.textBaseline = "middle";
-    ctx.fillText(`${acro} · ${driverNumber}`, air.x + 12 * dpr, air.y - 12 * dpr);
+    const teamCol = driver.team_colour ? new THREE.Color(`#${driver.team_colour}`) : new THREE.Color(0xd6001c);
+    const carR = trackSize * 0.018;
+    carObj = new THREE.Mesh(
+      new THREE.SphereGeometry(carR, 24, 20),
+      new THREE.MeshStandardMaterial({ color: teamCol, emissive: teamCol, emissiveIntensity: 0.6, roughness: 0.4 })
+    );
+    scene.add(carObj);
+
+    carShadow = new THREE.Mesh(
+      new THREE.CircleGeometry(carR * 1.1, 28),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.55 })
+    );
+    carShadow.position.z = tubeRadius + trackSize * 0.0005;
+    scene.add(carShadow);
   }
 
-  function draw(t) {
-    const w = canvas.width, h = canvas.height;
-    ctx.fillStyle = "#0b0d12";
-    ctx.fillRect(0, 0, w, h);
-    if (!loc.length) return;
+  function frameCamera(worldBox) {
+    const cx = (worldBox.minX + worldBox.maxX) / 2;
+    const cy = (worldBox.minY + worldBox.maxY) / 2;
+    const r = trackSize;
+    camera.position.set(cx + r * 0.9, cy - r * 0.9, r * 0.9);
+    controls.target.set(cx, cy, trackSize * 0.05);
+    camera.near = Math.max(0.01, r * 0.001);
+    camera.far = r * 50;
+    camera.updateProjectionMatrix();
+    controls.update();
+  }
 
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-
-    // How far the playback has progressed.
+  function updateScene(t) {
+    if (!ribbonGeom || !carObj) return;
     let upto = 0;
     while (upto < loc.length - 1 && loc[upto + 1].t <= t) upto++;
+    ribbonGeom.setDrawRange(0, upto * 6);
 
-    // Painter's algorithm: build a flat list of segments with an iso-depth
-    // key (x+y; smaller = farther from the viewer) and draw far→near.
-    // The ribbon piece for a played segment is at the same depth as its
-    // track piece, +ε so the ribbon paints over the track at that depth.
-    const segs = [];
-    for (let i = 1; i < loc.length; i++) {
-      const a = loc[i - 1], b = loc[i];
-      const d = a.x + a.y + b.x + b.y;
-      segs.push({ d, kind: "track", a, b });
-      if (i <= upto) segs.push({ d: d + 1e-6, kind: "ribbon", a, b });
-    }
-
-    // Insert the car as its own depth-sorted item so it occludes ribbon
-    // and track in front of it but is hidden by anything in front of it.
-    const cx = interp(loc, t, "x");
-    const cy = interp(loc, t, "y");
-    const cz = heightAt(t);
-    segs.push({ d: 2 * (cx + cy) + 2e-6, kind: "car", x: cx, y: cy, z: cz });
-
-    segs.sort((s1, s2) => s1.d - s2.d);
-
-    for (const s of segs) {
-      if (s.kind === "track") drawTrackSeg(s.a, s.b, w, h);
-      else if (s.kind === "ribbon") drawRibbonSeg(s.a, s.b, w, h);
-      else drawCarMarker(s.x, s.y, s.z, w, h);
-    }
+    const x = interp(loc, t, "x") ?? 0;
+    const y = interp(loc, t, "y") ?? 0;
+    const z = interp(loc, t, "h") ?? 0;
+    carObj.position.set(x, y, z);
+    if (carShadow) carShadow.position.set(x, y, carShadow.position.z);
   }
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    renderer.setSize(rect.width, rect.height, false);
+    camera.aspect = rect.width / rect.height;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", resize);
+
+  // The renderer runs continuously so OrbitControls damping stays smooth and
+  // the user can orbit/pan/zoom even while playback is paused.
+  function renderLoop() {
+    requestAnimationFrame(renderLoop);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  renderLoop();
+
+  // Rendering itself runs in renderLoop; draw(t) just pushes playback state
+  // (ribbon draw range, car position) into the scene. Existing callers
+  // (tick, restart, scrub) keep working unchanged.
+  function draw(t) { updateScene(t); }
 
   // ---- State ----
   let lap = null;       // lap metadata
@@ -650,32 +680,20 @@
     aRange = Math.max(1, ...accel.map(a => Math.abs(a)));
     loc.forEach((p, i) => { p.h = (accel[i] / aRange) * trackSize * HEIGHT_FRACTION; });
 
-    // Iso-space bbox covers both ground (z=0) and the lifted ribbon, so nothing clips.
-    bbox = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
-    const expand = (ix, iy) => {
-      if (ix < bbox.minX) bbox.minX = ix;
-      if (ix > bbox.maxX) bbox.maxX = ix;
-      if (iy < bbox.minY) bbox.minY = iy;
-      if (iy > bbox.maxY) bbox.maxY = iy;
-    };
-    for (const p of loc) {
-      const g = isoRaw(p.x, p.y, 0);
-      const a = isoRaw(p.x, p.y, p.h);
-      expand(g.ix, g.iy); expand(a.ix, a.iy);
-    }
-
-    trackPath = loc.map(p => ({ x: p.x, y: p.y }));
+    buildLapScene();
+    frameCamera(worldBox);
+    resize();
 
     currentT = 0;
     $("scrub").value = "0";
-    resizeCanvas();
-    draw(0);
+    updateScene(0);
     updatePanels(0);
     setStatus(`Loaded L${lap.lap_number} · ${fmtLap(lap.lap_duration)} · ${loc.length} loc pts · ${car.length} telemetry pts`);
   }
 
   async function init() {
     try {
+      resize();
       await loadDrivers();
       await loadDriver(driverNumber);
     } catch (e) {
@@ -690,7 +708,7 @@
   }
 
   init();
-})();
+}
 </script>
 </body>
 </html>
